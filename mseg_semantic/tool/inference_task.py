@@ -352,6 +352,27 @@ class InferenceTask:
         imageio.imwrite(output_demo_fpath, overlaid_img)
         imageio.imwrite(output_gray_fpath, pred_label_img)
 
+    def compute_single_img_pred(self, rgb_img, min_resolution: int = 1080) -> None:
+        """Since overlaid class text is difficult to read below 1080p, we upsample predictions."""
+
+        self.model.eval()
+
+        pred_label_img = self.execute_on_img(rgb_img)
+        mask_label_img = self.mask_foreground(pred_label_img, self.id_to_class_name_map)
+
+        # avoid blurry images by upsampling RGB before overlaying text
+        if np.amin(rgb_img.shape[:2]) < min_resolution:
+            rgb_img = resize_util.resize_img_by_short_side(rgb_img, min_resolution, "rgb")
+            pred_label_img = resize_util.resize_img_by_short_side(pred_label_img, min_resolution, "label")
+            mask_label_img = resize_util.resize_img_by_short_side(mask_label_img, min_resolution, "label")
+
+        metadata = None
+        frame_visualizer = Visualizer(rgb_img, metadata)
+        overlaid_img = frame_visualizer.overlay_instances(
+            label_map=pred_label_img, id_to_class_name_map=self.id_to_class_name_map
+        )
+        return overlaid_img, pred_label_img, mask_label_img
+
     def create_path_lists_from_dir(self) -> None:
         """Populate a .txt file with relative paths that will be used to create a Pytorch dataloader."""
         self.args.data_root = self.input_file
@@ -396,6 +417,18 @@ class InferenceTask:
         prediction = prediction.data.cpu().numpy()
         gray_img = np.uint8(prediction)
         return gray_img
+
+    def mask_foreground(self, gray_img_orig: np.ndarray, id_to_class_name_map) -> np.ndarray:
+        gray_img = gray_img_orig.flatten()
+        mask_img = np.zeros_like(gray_img)
+
+        for label_idx in np.unique(gray_img):
+            text = id_to_class_name_map[label_idx]
+            if "person" in text:
+                mask_img[gray_img == label_idx] = 255
+
+        mask_img = mask_img.reshape(gray_img_orig.shape)
+        return mask_img
 
     def execute_on_video(self, max_num_frames: int = 5000, min_resolution: int = 1080) -> None:
         """
@@ -598,6 +631,49 @@ class InferenceTask:
 
         return output
 
+class SemSeg:
+    def __init__(self) -> None:
+        use_gpu = True
+        args = lambda: None
+        args.config = "./thirdparty/mseg-semantic/mseg_semantic/config/test/default_config_360_ms.yaml"
+        args.opts = ['model_name', 'mseg-3m', 'model_path', os.environ.get('MSEG_MODEL_PATH')] #, 'input_file', './tum1.jpg'
+        args.file_save = "default"
+
+        cfg = config.load_cfg_from_cfg_file(args.config)
+        if args.opts is not None:
+            cfg = config.merge_cfg_from_list(cfg, args.opts)
+        args = cfg
+        if args.dataset == "default":
+            args.dataset = Path(args.input_file).stem
+        if "scannet" in args.dataset:
+            args.img_name_unique = False
+        else:
+            args.img_name_unique = True
+        args.u_classes = names_utils.get_universal_class_names()
+        args.print_freq = 10
+        args.split = "test"
+        args.num_model_classes = len(args.u_classes)
+
+        logger.info("=> creating model ...")
+        itask = InferenceTask(
+            args,
+            base_size=args.base_size,
+            crop_h=args.test_h,
+            crop_w=args.test_w,
+            input_file=None,
+            model_taxonomy="universal",
+            eval_taxonomy="universal",
+            scales=args.scales,
+        )
+        self.itask = itask
+    
+    def segment(self, rgb_img):
+        logger.info("=> running model ...")
+        overlaid_img, pred_label_img, mask_label_img = self.itask.compute_single_img_pred(rgb_img)
+        logger.info("=> completed execution!")
+        return overlaid_img, pred_label_img, mask_label_img
 
 if __name__ == "__main__":
     pass
+
+
