@@ -77,6 +77,7 @@ class BatchedInferenceTask(InferenceTask):
             # argument is a path to a directory
             self.create_path_lists_from_dir()
             test_loader, self.data_list = create_test_loader(self.args, use_batched_inference=True)
+            logger.error("kln: calling execute on dataloader batched")
             self.execute_on_dataloader_batched(test_loader)
 
         else:
@@ -89,21 +90,28 @@ class BatchedInferenceTask(InferenceTask):
         if self.args.save_folder == "default":
             self.args.save_folder = f"{_ROOT}/temp_files/{self.args.model_name}_{self.args.dataset}_universal_{self.scales_str}/{self.args.base_size}"
 
+        logger.error("kln: save_dir=%s", self.args.save_folder)
+
         os.makedirs(self.args.save_folder, exist_ok=True)
         gray_folder = os.path.join(self.args.save_folder, "gray")
         self.gray_folder = gray_folder
+
+        mask_folder = os.path.join(self.args.save_folder, "mask")
+        self.mask_folder = mask_folder
 
         data_time = AverageMeter()
         batch_time = AverageMeter()
         end = time.time()
 
         dir_utils.check_mkdir(self.gray_folder)
+        dir_utils.check_mkdir(self.mask_folder)
+        logger.error("kln: mask_dir=%s", self.mask_folder)
 
         for i, (input, _) in enumerate(test_loader):
             logger.info(f"On batch {i}")
             data_time.update(time.time() - end)
 
-            gray_batch = self.execute_on_batch(input)
+            gray_batch, mask_batch = self.execute_on_batch(input)
             batch_sz = input.shape[0]
             # dump results to disk
             for j in range(batch_sz):
@@ -114,7 +122,9 @@ class BatchedInferenceTask(InferenceTask):
                 else:
                     image_name = get_unique_stem_from_last_k_strs(image_path)
                 gray_path = os.path.join(self.gray_folder, image_name + ".png")
+                mask_path = os.path.join(self.mask_folder, image_name + ".png")
                 cv2.imwrite(gray_path, gray_batch[j])
+                cv2.imwrite(mask_path, mask_batch[j])
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -125,6 +135,18 @@ class BatchedInferenceTask(InferenceTask):
                     f"Data {data_time.val:.3f} (avg={data_time.avg:.3f})"
                     f"Batch {batch_time.val:.3f} (avg={batch_time.avg:.3f})"
                 )
+
+    def mask_foreground(self, gray_img_orig: np.ndarray, id_to_class_name_map) -> np.ndarray:
+        gray_img = gray_img_orig.flatten()
+        mask_img = np.zeros_like(gray_img)
+
+        for label_idx in np.unique(gray_img):
+            text = id_to_class_name_map[label_idx]
+            if "person" in text or "car" in text or "truck" in text or "bus" in text:
+                mask_img[gray_img == label_idx] = 255
+
+        mask_img = mask_img.reshape(gray_img_orig.shape)
+        return mask_img
 
     def execute_on_batch(self, batch: torch.Tensor) -> np.ndarray:
         """Only allows for single-scale inference in batch processing mode for now"""
@@ -138,8 +160,9 @@ class BatchedInferenceTask(InferenceTask):
 
         predictions = predictions.data.cpu().numpy()
         gray_batch = np.uint8(predictions)
+        mask_batch = self.mask_foreground(gray_batch, self.id_to_class_name_map)
 
-        return gray_batch
+        return gray_batch, mask_batch
 
     def scale_process_cuda_batched(
         self, batch: torch.Tensor, native_h: int, native_w: int, stride_rate: float = 2 / 3

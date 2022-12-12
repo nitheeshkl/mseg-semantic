@@ -424,7 +424,7 @@ class InferenceTask:
 
         for label_idx in np.unique(gray_img):
             text = id_to_class_name_map[label_idx]
-            if "person" in text:
+            if "person" in text or "car" in text or "truck" in text or "bus" in text:
                 mask_img[gray_img == label_idx] = 255
 
         mask_img = mask_img.reshape(gray_img_orig.shape)
@@ -480,11 +480,19 @@ class InferenceTask:
         gray_folder = os.path.join(self.args.save_folder, "gray")
         self.gray_folder = gray_folder
 
+        mask_folder = os.path.join(self.args.save_folder, "mask")
+        self.mask_folder = mask_folder
+
+        overlaid_folder = os.path.join(self.args.save_folder, "overlaid")
+        self.overlaid_folder = overlaid_folder
+
         data_time = AverageMeter()
         batch_time = AverageMeter()
         end = time.time()
 
         check_mkdir(self.gray_folder)
+        check_mkdir(self.mask_folder)
+        check_mkdir(self.overlaid_folder)
 
         for i, (input, _) in enumerate(test_loader):
             logger.info(f"On image {i}")
@@ -497,17 +505,26 @@ class InferenceTask:
             else:
                 image_name = get_unique_stem_from_last_k_strs(image_path)
             gray_path = os.path.join(self.gray_folder, image_name + ".png")
+            mask_path = os.path.join(self.mask_folder, image_name + ".png")
+            overlaid_path = os.path.join(self.overlaid_folder, image_name + ".png")
+
             if Path(gray_path).exists():
                 continue
 
             # convert Pytorch tensor -> Numpy, then feedforward
             input = np.squeeze(input.numpy(), axis=0)
             image = np.transpose(input, (1, 2, 0))
-            gray_img = self.execute_on_img(image)
+            # gray_img = self.execute_on_img(image)
+            # mask_img = self.mask_foreground(gray_img)
+
+            overlaid_img, gray_img, mask_img = self.compute_single_img_pred(image)
+            
+            print(image.shape, mask_img.shape)
 
             batch_time.update(time.time() - end)
             end = time.time()
             cv2.imwrite(gray_path, gray_img)
+            cv2.imwrite(mask_path, mask_img)
 
             # todo: update to time remaining.
             if ((i + 1) % self.args.print_freq == 0) or (i + 1 == len(test_loader)):

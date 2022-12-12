@@ -14,7 +14,8 @@ from mseg.utils.names_utils import load_class_names, get_universal_class_names
 import mseg_semantic.utils.logger_utils as logger_utils
 from mseg_semantic.utils import config
 from mseg_semantic.utils.config import CfgNode
-from mseg_semantic.tool.batched_inference_task import BatchedInferenceTask
+# from mseg_semantic.tool.batched_inference_task import BatchedInferenceTask
+from batched_inference_task import BatchedInferenceTask
 
 
 _ROOT = Path(__file__).resolve().parent.parent
